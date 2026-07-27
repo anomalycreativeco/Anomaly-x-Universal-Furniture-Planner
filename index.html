@@ -399,6 +399,13 @@
     .month-label{font-size:24px}
     .act-btn{width:34px; height:34px}
   }
+
+  .share-btn{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;
+    color:var(--text);background:transparent;border:1px solid var(--line);
+    border-radius:999px;padding:7px 14px 7px 12px;transition:transform .2s,background .2s,color .2s}
+  .share-btn:hover{transform:translateY(-1px)}
+  .share-btn.copied{background:#6D8F88;color:#fff;border-color:#6D8F88}
+  @media(max-width:640px){.share-btn span{display:none}.share-btn{padding:7px}}
 </style>
 </head>
 <body>
@@ -411,6 +418,10 @@
   <div class="head-right">
     <span class="tagline">Monthly Content Planner</span>
     <span class="status"><span id="dot" class="dot demo"></span><span id="statusText">Local demo</span></span>
+    <button class="share-btn" id="shareClient" title="Copy a no-login link to share with the client" aria-label="Share with client">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>
+      <span>Share with client</span>
+    </button>
     <button class="theme-toggle" id="themeToggle" title="Toggle light / dark" aria-label="Toggle light or dark mode"></button>
   </div>
 </header>
@@ -988,6 +999,17 @@ document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && !$('#moveModa
 
 /* ---- toast ---- */
 let toastTimer;
+$('#shareClient').addEventListener('click', async ()=>{
+  const link = location.origin + location.pathname; // clean, no-login client link
+  const btn = $('#shareClient'), lbl = btn.querySelector('span');
+  try{ await navigator.clipboard.writeText(link); }
+  catch(e){ const ta=document.createElement('textarea'); ta.value=link; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(_){} ta.remove(); }
+  const prev = lbl ? lbl.textContent : '';
+  btn.classList.add('copied'); if(lbl) lbl.textContent='Link copied';
+  toast('Client link copied — anyone with it can open this planner (no login). It reaches nothing else.');
+  setTimeout(()=>{ btn.classList.remove('copied'); if(lbl) lbl.textContent=prev; }, 2200);
+});
+
 function toast(msg){
   $('#toastMsg').textContent = msg;
   const t = $('#toast'); t.classList.add('show');
