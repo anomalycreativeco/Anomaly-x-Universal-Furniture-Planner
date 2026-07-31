@@ -623,12 +623,15 @@ async function initStore(){
 function makeFirestoreStore(fs, db){
   const { collection, doc, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp } = fs;
   const rowsCol = (monthKey)=> collection(db, 'months', monthKey, 'rows');
-  const keysCol = (monthKey)=> collection(db, 'months', monthKey, 'keydates');
+  // Key dates share the rows collection, tagged with kind:'keydate', and are
+  // filtered apart at read time. They had their own subcollection first, but
+  // that needed a security-rules change to work — not worth the coupling.
+  const KEY = 'keydate';
   return {
     subscribe(monthKey, cb){
       const q = query(rowsCol(monthKey), orderBy('order'));
       return onSnapshot(q, (snap)=>{
-        const rows = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+        const rows = snap.docs.map(d=>({ id:d.id, ...d.data() })).filter(r=> r.kind !== KEY);
         cb(rows);
       }, (err)=> console.error('snapshot error', err));
     },
@@ -636,13 +639,13 @@ function makeFirestoreStore(fs, db){
     updateRow(monthKey, id, patch){ return updateDoc(doc(db,'months',monthKey,'rows',id), patch); },
     deleteRow(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'rows',id)); },
     subscribeKeys(monthKey, cb){
-      const q = query(keysCol(monthKey), orderBy('order'));
-      return onSnapshot(q, (snap)=> cb(snap.docs.map(d=>({ id:d.id, ...d.data() }))),
+      const q = query(rowsCol(monthKey), orderBy('order'));
+      return onSnapshot(q, (snap)=> cb(snap.docs.map(d=>({ id:d.id, ...d.data() })).filter(r=> r.kind === KEY)),
         (err)=> console.error('keydates snapshot error', err));
     },
-    addKey(monthKey, data){ return addDoc(keysCol(monthKey), { ...data, createdAt:serverTimestamp() }); },
-    updateKey(monthKey, id, patch){ return updateDoc(doc(db,'months',monthKey,'keydates',id), patch); },
-    deleteKey(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'keydates',id)); }
+    addKey(monthKey, data){ return addDoc(rowsCol(monthKey), { ...data, kind:KEY, createdAt:serverTimestamp() }); },
+    updateKey(monthKey, id, patch){ return updateDoc(doc(db,'months',monthKey,'rows',id), patch); },
+    deleteKey(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'rows',id)); }
   };
 }
 
