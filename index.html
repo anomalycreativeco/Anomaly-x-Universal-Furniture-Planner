@@ -138,6 +138,19 @@
     font-size:15px; line-height:1; padding:6px; border-radius:8px}
   .keyrow .kdel:hover{color:#e8857f; background:rgba(232,133,127,.10)}
   .keys-empty{font-size:12.5px; color:var(--muted); padding:10px 0}
+  /* column labels — makes the from/through range readable at a glance */
+  .keyhead{display:grid; grid-template-columns:132px 132px 1fr 1fr 30px; gap:8px;
+    font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--muted); padding:0 2px 2px}
+  .keyhead span:nth-child(2){position:relative}
+  .keyhead span:nth-child(2)::before{content:'–'; position:absolute; left:-11px;
+    color:var(--muted); font-weight:400}
+  .keys-err{display:none; margin-top:10px; font-size:12.5px; line-height:1.5;
+    color:#8c3b34; background:rgba(232,133,127,.12); border:1px solid rgba(232,133,127,.35);
+    border-radius:10px; padding:10px 12px}
+  .keys-err.show{display:block}
+  .keys-err code{font-size:11.5px; background:rgba(0,0,0,.07); padding:1px 5px; border-radius:4px}
+  @media(max-width:760px){ .keyhead{display:none} }
   .keys-add{margin-top:10px; display:inline-flex; align-items:center; gap:8px;
     font:inherit; font-size:13px; font-weight:600; color:var(--text); cursor:pointer;
     background:none; border:1px dashed var(--line); border-radius:10px; padding:9px 16px}
@@ -498,9 +511,10 @@
           <h2>Key dates</h2>
           <span class="keys-key"><i></i>shown in amber on the calendar</span>
         </div>
-        <p class="keys-sub">Events and dates to know about — market weeks, launches, shoot windows. No deliverable attached. Leave the date blank if it isn't pinned down yet.</p>
+        <p class="keys-sub">Events and dates to know about — market weeks, launches, shoot windows. No deliverable attached. Leave the date blank if it isn't pinned down yet, or fill in both dates for a range like Market, Oct 17–21.</p>
         <div class="keys-list" id="keysList"></div>
         <button class="keys-add" id="addKey"><span class="plus">+</span> Add key date</button>
+        <div class="keys-err" id="keysErr"></div>
       </div>
     </section>
 
@@ -888,13 +902,14 @@ function renderKeys(force){
     wrap.innerHTML = '<div class="keys-empty">Nothing yet — add market weeks, launches, or shoot windows the client wants on your radar.</div>';
     return;
   }
-  wrap.innerHTML = '';
+  wrap.innerHTML = '<div class="keyhead"><span>Date</span><span>Through</span>'+
+                   '<span>Event</span><span>Notes</span><span></span></div>';
   currentKeys.slice().sort((a,b)=>(a.order||0)-(b.order||0)).forEach(k=>{
     const row = document.createElement('div');
     row.className = 'keyrow'; row.dataset.id = k.id;
     row.innerHTML =
-      `<input type="date" data-kf="date"  value="${k.date||''}" title="Date (optional)">`+
-      `<input type="date" data-kf="end"   value="${k.end||''}"  title="Through — only for multi-day events">`+
+      `<input type="date" data-kf="date"  value="${k.date||''}" title="Date — leave blank if it isn't pinned down yet">`+
+      `<input type="date" data-kf="end"   value="${k.end||''}"  title="Through — fill this in only for a multi-day range">`+
       `<input type="text" data-kf="title" value="${(k.title||'').replace(/"/g,'&quot;')}" placeholder="Event — e.g. High Point Market">`+
       `<input type="text" data-kf="notes" value="${(k.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes (optional)">`+
       `<button class="kdel" title="Remove">✕</button>`;
@@ -1139,29 +1154,45 @@ function toast(msg){
   toastTimer = setTimeout(()=> t.classList.remove('show'), 2600);
 }
 
-/* Key dates — add / edit / remove */
+/* Key dates — add / edit / remove.
+   Every store call goes through kguard: a rejected write used to fail silently,
+   which made the Add button look broken when Firestore rules blocked the
+   subcollection. Now the reason is on screen. */
+function kguard(p, what){
+  return Promise.resolve(p).catch(err=>{
+    const box = $('#keysErr'); if(!box) throw err;
+    const code = (err && (err.code || err.message)) || '';
+    box.innerHTML = /permission|insufficient/i.test(code)
+      ? "Couldn't "+what+" — Firestore is blocking the <code>keydates</code> collection. "+
+        "Publish the updated security rules in the Firebase console, then reload this page."
+      : "Couldn't "+what+" — "+String(code || err);
+    box.classList.add('show');
+    console.error('key dates:', what, err);
+  });
+}
 $('#addKey').addEventListener('click', ()=>{
-  store.addKey(monthKey(), { order:(currentKeys.length?Math.max(...currentKeys.map(k=>k.order||0))+1:0),
-                             date:'', end:'', title:'', notes:'' });
+  $('#keysErr')?.classList.remove('show');
+  kguard(store.addKey(monthKey(), { order:(currentKeys.length?Math.max(...currentKeys.map(k=>k.order||0))+1:0),
+                             date:'', end:'', title:'', notes:'' }), 'add that key date');
 });
 $('#keysList').addEventListener('input', (e)=>{
   const el = e.target, f = el.dataset.kf; if(!f) return;
   const id = el.closest('.keyrow')?.dataset.id; if(!id) return;
   clearTimeout(el._kt);
-  el._kt = setTimeout(()=> store.updateKey(monthKey(), id, { [f]: el.value }), 350);
+  el._kt = setTimeout(()=> kguard(store.updateKey(monthKey(), id, { [f]: el.value }), 'save that change'), 350);
 });
 $('#keysList').addEventListener('change', (e)=>{
   const el = e.target, f = el.dataset.kf; if(!f) return;
   const id = el.closest('.keyrow')?.dataset.id; if(!id) return;
   clearTimeout(el._kt);
-  store.updateKey(monthKey(), id, { [f]: el.value });
+  kguard(store.updateKey(monthKey(), id, { [f]: el.value }), 'save that change');
 });
 $('#keysList').addEventListener('click', (e)=>{
   const btn = e.target.closest('.kdel'); if(!btn) return;
   const rowEl = btn.closest('.keyrow'); const id = rowEl?.dataset.id; if(!id) return;
   const k = currentKeys.find(x=>x.id===id);
   const label = (k && k.title) ? `"${k.title}"` : 'this key date';
-  if(confirm(`Remove ${label}?`)) store.deleteKey(monthKey(), id);
+  if(confirm(`Remove ${label}?`)) kguard(store.deleteKey(monthKey(), id), 'remove that key date');
 });
 
 $('#addRow').addEventListener('click', ()=>{
