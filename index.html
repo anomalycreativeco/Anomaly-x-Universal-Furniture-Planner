@@ -13,9 +13,9 @@
 <style>
   :root{
     --bg:#0a0a0a; --bg-2:#111111; --surface:#141414; --surface-2:#1a1a1a;
-    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
+    --line:rgba(255,255,255,.09); --key:#f0b860; --line-2:rgba(255,255,255,.16);
     --text:#f4f4f4; --muted:#8d8d8d; --faint:#5e5e5e;
-    --accent:#98caea; --accent-dim:rgba(152,202,234,.16);
+    --accent:#98caea; --key:#e0a44a; --accent-dim:rgba(152,202,234,.16);
     --done:#5dcaa5; --done-tint:rgba(93,202,165,.13); --done-tint-2:rgba(93,202,165,.20);
     --serif:'Fraunces',Georgia,serif; --sans:'Hanken Grotesk',system-ui,sans-serif;
     --simple:'Helvetica Neue',Helvetica,Arial,sans-serif;
@@ -118,6 +118,34 @@
   .cal-dots i.d-open{background:var(--accent)}
   .cal-dots i.d-done{background:var(--done)}
   .cal-dots i.d-late{background:#e8857f}
+  .cal-dots i.d-key{background:var(--key)}
+
+  /* ---- Key dates: client events, deliberately separate from the planner ---- */
+  .keys-card{margin-top:22px; background:var(--card); border:1px solid var(--line);
+    border-radius:16px; padding:18px 20px 16px}
+  .keys-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px}
+  .keys-head h2{margin:0; font-size:15px; letter-spacing:.01em}
+  .keys-key{display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--muted)}
+  .keys-key i{width:8px; height:8px; border-radius:50%; background:var(--key); display:block}
+  .keys-sub{margin:0 0 12px; font-size:12.5px; color:var(--muted)}
+  .keys-list{display:flex; flex-direction:column; gap:8px}
+  .keyrow{display:grid; grid-template-columns:132px 132px 1fr 1fr 30px; gap:8px; align-items:center}
+  .keyrow input{width:100%; font:inherit; font-size:13px; color:var(--text);
+    background:var(--field, rgba(127,127,127,.06)); border:1px solid var(--line);
+    border-radius:9px; padding:8px 10px; outline:none}
+  .keyrow input:focus{border-color:var(--key)}
+  .keyrow .kdel{border:0; background:none; color:var(--muted); cursor:pointer;
+    font-size:15px; line-height:1; padding:6px; border-radius:8px}
+  .keyrow .kdel:hover{color:#e8857f; background:rgba(232,133,127,.10)}
+  .keys-empty{font-size:12.5px; color:var(--muted); padding:10px 0}
+  .keys-add{margin-top:10px; display:inline-flex; align-items:center; gap:8px;
+    font:inherit; font-size:13px; font-weight:600; color:var(--text); cursor:pointer;
+    background:none; border:1px dashed var(--line); border-radius:10px; padding:9px 16px}
+  .keys-add:hover{border-color:var(--key); color:var(--key)}
+  @media(max-width:760px){
+    .keyrow{grid-template-columns:1fr 1fr; grid-auto-rows:min-content}
+    .keyrow .kdel{grid-column:2; justify-self:end}
+  }
   .cal-day.sel .cal-dots i{background:#06243a}
 
   .cal-foot{margin-top:12px; padding-top:11px; border-top:1px solid var(--line);
@@ -463,6 +491,17 @@
         </table>
       </div>
       <button class="add-row" id="addRow"><span class="plus">+</span> Add row</button>
+
+      <!-- Key dates: client events to know about; not deliverables, kept separate -->
+      <div class="keys-card">
+        <div class="keys-head">
+          <h2>Key dates</h2>
+          <span class="keys-key"><i></i>shown in amber on the calendar</span>
+        </div>
+        <p class="keys-sub">Events and dates to know about — market weeks, launches, shoot windows. No deliverable attached. Leave the date blank if it isn't pinned down yet.</p>
+        <div class="keys-list" id="keysList"></div>
+        <button class="keys-add" id="addKey"><span class="plus">+</span> Add key date</button>
+      </div>
     </section>
 
     <aside class="pane-cal">
@@ -570,6 +609,7 @@ async function initStore(){
 function makeFirestoreStore(fs, db){
   const { collection, doc, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp } = fs;
   const rowsCol = (monthKey)=> collection(db, 'months', monthKey, 'rows');
+  const keysCol = (monthKey)=> collection(db, 'months', monthKey, 'keydates');
   return {
     subscribe(monthKey, cb){
       const q = query(rowsCol(monthKey), orderBy('order'));
@@ -580,7 +620,15 @@ function makeFirestoreStore(fs, db){
     },
     addRow(monthKey, data){ return addDoc(rowsCol(monthKey), { ...data, createdAt:serverTimestamp() }); },
     updateRow(monthKey, id, patch){ return updateDoc(doc(db,'months',monthKey,'rows',id), patch); },
-    deleteRow(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'rows',id)); }
+    deleteRow(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'rows',id)); },
+    subscribeKeys(monthKey, cb){
+      const q = query(keysCol(monthKey), orderBy('order'));
+      return onSnapshot(q, (snap)=> cb(snap.docs.map(d=>({ id:d.id, ...d.data() }))),
+        (err)=> console.error('keydates snapshot error', err));
+    },
+    addKey(monthKey, data){ return addDoc(keysCol(monthKey), { ...data, createdAt:serverTimestamp() }); },
+    updateKey(monthKey, id, patch){ return updateDoc(doc(db,'months',monthKey,'keydates',id), patch); },
+    deleteKey(monthKey, id){ return deleteDoc(doc(db,'months',monthKey,'keydates',id)); }
   };
 }
 
@@ -588,6 +636,9 @@ function makeFirestoreStore(fs, db){
 function makeDemoStore(){
   const data = {};      // monthKey -> [rows]
   const subs = {};      // monthKey -> Set(cb)
+  const kdata = {};     // monthKey -> [key dates]
+  const ksubs = {};     // monthKey -> Set(cb)
+  const kemit = (mk)=> (ksubs[mk]||new Set()).forEach(cb=>cb(clone(kdata[mk]||[]).sort((a,b)=>a.order-b.order)));
   let seq = 1;
   const nid = ()=> 'demo-'+(seq++);
 
@@ -618,6 +669,19 @@ function makeDemoStore(){
     },
     deleteRow(monthKey, id){
       data[monthKey] = (data[monthKey]||[]).filter(x=>x.id!==id); emit(monthKey); return Promise.resolve();
+    },
+    subscribeKeys(monthKey, cb){
+      (ksubs[monthKey] ||= new Set()).add(cb);
+      cb(clone(kdata[monthKey]||[]).sort((a,b)=>a.order-b.order));
+      return ()=> ksubs[monthKey].delete(cb);
+    },
+    addKey(monthKey, d){ (kdata[monthKey] ||= []).push({ id:nid(), ...d }); kemit(monthKey); return Promise.resolve(); },
+    updateKey(monthKey, id, patch){
+      const r = (kdata[monthKey]||[]).find(x=>x.id===id);
+      if(r) Object.assign(r, patch); kemit(monthKey); return Promise.resolve();
+    },
+    deleteKey(monthKey, id){
+      kdata[monthKey] = (kdata[monthKey]||[]).filter(x=>x.id!==id); kemit(monthKey); return Promise.resolve();
     }
   };
 }
@@ -641,6 +705,8 @@ const rowsEl = $('#rows');
 
 let view = new Date();           // currently displayed month
 let current = [];                // latest rows snapshot for the month
+let currentKeys = [];            // latest key-date snapshot for the month
+let unsubKeys = null;
 let unsub = null;
 let writeTimers = {};            // debounce timers per cell
 let creatingBlank = false;       // guard against double blank-row creation
@@ -663,6 +729,9 @@ function subscribeMonth(){
   current = [];
   dayFilter = null;                 // a day selection shouldn't carry across months
   rowsEl.innerHTML = `<tr><td colspan="7" class="empty-note">Loading…</td></tr>`;
+  if(unsubKeys) unsubKeys();
+  currentKeys = [];
+  unsubKeys = store.subscribeKeys(monthKey(), (keys)=>{ currentKeys = keys; renderKeys(); renderCalendar(); });
   unsub = store.subscribe(monthKey(), (rows)=>{
     current = rows;
     if(rows.length===0 && !creatingBlank){
@@ -691,6 +760,7 @@ function restoreFocus(f){
 }
 
 function render(){
+  renderKeys();
   const focus = captureFocus();
   const q = $('#search').value.trim().toLowerCase();
   rowsEl.innerHTML = '';
@@ -789,6 +859,49 @@ let dayFilter = null;              // ISO date string, or null
 
 const isoOf = (y,m,d)=> `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 
+/* ---- Key dates ------------------------------------------------------
+   Client events, not deliverables. A key date may have no date at all, a
+   single date, or a range (Market, Oct 17-21). Kept in its own collection
+   and its own section so it never mixes with the planner rows. */
+function keyDays(k){
+  if(!k || !k.date) return [];
+  const out = [k.date];
+  if(k.end && k.end > k.date){
+    const d = new Date(k.date+'T00:00:00'), stop = new Date(k.end+'T00:00:00');
+    let guard = 0;
+    while(d < stop && guard++ < 400){
+      d.setDate(d.getDate()+1);
+      out.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    }
+  }
+  return out;
+}
+let keysSig = null;
+function renderKeys(force){
+  const wrap = $('#keysList'); if(!wrap) return;
+  // rebuilding while someone is typing would blow away their input — only redraw
+  // when rows are added/removed, not when a field value changes.
+  const sig = currentKeys.map(k=>k.id).join('|');
+  if(!force && sig === keysSig && wrap.children.length) return;
+  keysSig = sig;
+  if(!currentKeys.length){
+    wrap.innerHTML = '<div class="keys-empty">Nothing yet — add market weeks, launches, or shoot windows the client wants on your radar.</div>';
+    return;
+  }
+  wrap.innerHTML = '';
+  currentKeys.slice().sort((a,b)=>(a.order||0)-(b.order||0)).forEach(k=>{
+    const row = document.createElement('div');
+    row.className = 'keyrow'; row.dataset.id = k.id;
+    row.innerHTML =
+      `<input type="date" data-kf="date"  value="${k.date||''}" title="Date (optional)">`+
+      `<input type="date" data-kf="end"   value="${k.end||''}"  title="Through — only for multi-day events">`+
+      `<input type="text" data-kf="title" value="${(k.title||'').replace(/"/g,'&quot;')}" placeholder="Event — e.g. High Point Market">`+
+      `<input type="text" data-kf="notes" value="${(k.notes||'').replace(/"/g,'&quot;')}" placeholder="Notes (optional)">`+
+      `<button class="kdel" title="Remove">✕</button>`;
+    wrap.appendChild(row);
+  });
+}
+
 function renderCalendar(){
   const y = view.getFullYear(), m = view.getMonth();
   $('#calMonth').textContent = `${MONTHS[m].slice(0,3)} ${y}`;
@@ -804,6 +917,10 @@ function renderCalendar(){
     if(!r.due){ unscheduled++; return; }
     (byDay[r.due] ||= []).push(r);
   });
+
+  // key dates by day (ranges expand across every day they cover)
+  const keyByDay = {};
+  currentKeys.forEach(k=> keyDays(k).forEach(ds=> (keyByDay[ds] ||= []).push(k)));
 
   const first = new Date(y, m, 1).getDay();        // 0=Sun
   const days  = new Date(y, m+1, 0).getDate();
@@ -822,15 +939,16 @@ function renderCalendar(){
   for(let d=1; d<=days; d++){
     const iso = isoOf(y,m,d);
     const items = byDay[iso] || [];
+    const keys  = keyByDay[iso] || [];
     const isToday = (iso === t);
     const c = document.createElement('button');
     c.className = 'cal-day';
-    if(items.length) c.classList.add('has');
+    if(items.length || keys.length) c.classList.add('has');
     if(isToday){ c.classList.add('today'); c.setAttribute('aria-current','date'); }
     if(dayFilter === iso) c.classList.add('sel');
     c.textContent = d;
 
-    if(items.length){
+    if(items.length || keys.length){
       const open = items.filter(r=>!r.done);
       const late = open.length > 0 && iso < t;          // past-dated with unfinished items
       const dots = document.createElement('span');
@@ -839,9 +957,13 @@ function renderCalendar(){
       const kind = late ? 'd-late' : open.length ? 'd-open' : 'd-done';
       const n = Math.min(items.length, 3);
       for(let i=0;i<n;i++){ const s=document.createElement('i'); s.className=kind; dots.appendChild(s); }
+      // key dates get their own amber dot so events read differently to deliverables
+      for(let i=0;i<Math.min(keys.length,2);i++){ const s=document.createElement('i'); s.className='d-key'; dots.appendChild(s); }
       c.appendChild(dots);
-      const label = items.length===1 ? '1 item' : `${items.length} items`;
-      c.title = `${isToday?'Today · ':''}${MONTHS[m]} ${d} — ${label}${late?' · overdue':''}`;
+      const bits = [];
+      if(items.length) bits.push(items.length===1 ? '1 item' : `${items.length} items`);
+      keys.forEach(k=> bits.push('◆ ' + (k.title || 'Key date')));
+      c.title = `${isToday?'Today · ':''}${MONTHS[m]} ${d} — ${bits.join(' · ')}${late?' · overdue':''}`;
       c.addEventListener('click', ()=>{
         dayFilter = (dayFilter === iso) ? null : iso;   // click again to clear
         render();
@@ -1016,6 +1138,31 @@ function toast(msg){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(()=> t.classList.remove('show'), 2600);
 }
+
+/* Key dates — add / edit / remove */
+$('#addKey').addEventListener('click', ()=>{
+  store.addKey(monthKey(), { order:(currentKeys.length?Math.max(...currentKeys.map(k=>k.order||0))+1:0),
+                             date:'', end:'', title:'', notes:'' });
+});
+$('#keysList').addEventListener('input', (e)=>{
+  const el = e.target, f = el.dataset.kf; if(!f) return;
+  const id = el.closest('.keyrow')?.dataset.id; if(!id) return;
+  clearTimeout(el._kt);
+  el._kt = setTimeout(()=> store.updateKey(monthKey(), id, { [f]: el.value }), 350);
+});
+$('#keysList').addEventListener('change', (e)=>{
+  const el = e.target, f = el.dataset.kf; if(!f) return;
+  const id = el.closest('.keyrow')?.dataset.id; if(!id) return;
+  clearTimeout(el._kt);
+  store.updateKey(monthKey(), id, { [f]: el.value });
+});
+$('#keysList').addEventListener('click', (e)=>{
+  const btn = e.target.closest('.kdel'); if(!btn) return;
+  const rowEl = btn.closest('.keyrow'); const id = rowEl?.dataset.id; if(!id) return;
+  const k = currentKeys.find(x=>x.id===id);
+  const label = (k && k.title) ? `"${k.title}"` : 'this key date';
+  if(confirm(`Remove ${label}?`)) store.deleteKey(monthKey(), id);
+});
 
 $('#addRow').addEventListener('click', ()=>{
   const nextOrder = current.length ? Math.max(...current.map(r=>r.order))+1 : 0;
